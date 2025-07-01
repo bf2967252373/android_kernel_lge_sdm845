@@ -41,6 +41,11 @@ jobs:
         sudo apt update
         sudo apt install -y bazel
         
+    - name: Verify Bazel installation
+      run: |
+        bazel --version
+        bazel info
+        
     - name: Setup repo tool
       run: |
         mkdir -p ~/bin
@@ -101,49 +106,54 @@ jobs:
         # 应用配置
         cp build.config.gki.aarch64 common/build.config.gki.aarch64
         
-    - name: Set up environment variables
+    - name: Build kernel with Make (recommended)
       run: |
-        # 设置主机工具链路径
-        echo "CC=$(which gcc)" >> $GITHUB_ENV
-        echo "CXX=$(which g++)" >> $GITHUB_ENV
-        echo "LD=$(which ld)" >> $GITHUB_ENV
-        echo "AR=$(which ar)" >> $GITHUB_ENV
-        echo "NM=$(which nm)" >> $GITHUB_ENV
+        # 设置环境变量
+        export ARCH=arm64
+        export CROSS_COMPILE=aarch64-linux-gnu-
         
-    - name: Build kernel with Bazel
-      run: |
-        # 使用 Bazel 构建，增加内存限制
-        tools/bazel run --config=fast --host_jvm_args="-Xmx4096m" //common:kernel_aarch64_dist
+        # 进入内核目录
+        cd common
         
-    - name: Verify build artifacts
-      run: |
-        # 检查 Bazel 输出
-        if [ ! -f "bazel-bin/common/kernel_aarch64_dist" ]; then
-            echo "::error::Bazel build failed!"
-            ls -R bazel-bin
+        # 准备配置
+        make gki_defconfig
+        
+        # 应用 SukiSU 所需配置
+        ./scripts/config --enable OVERLAY_FS
+        ./scripts/config --enable KPROBES
+        ./scripts/config --enable KALLSYMS
+        ./scripts/config --enable KALLSYMS_ALL
+        ./scripts/config --enable MODULES
+        ./scripts/config --enable MODULE_UNLOAD
+        ./scripts/config --enable TRACEPOINTS
+        
+        # 应用配置更改
+        make olddefconfig
+        
+        # 构建内核
+        make -j$(nproc) Image.gz-dtb
+        
+        # 验证构建结果
+        if [ ! -f "arch/arm64/boot/Image.gz-dtb" ]; then
+            echo "::error::Kernel image not found!"
             exit 1
         fi
         
-        # 检查内核映像
-        dist_dir="out/common-android13-5.15/dist"
-        if [ ! -f "$dist_dir/Image" ]; then
-            echo "::error::Kernel image not found in $dist_dir!"
-            find out -name Image -print
-            exit 1
-        fi
-        echo "✅ Kernel build successful!"
+        # 准备输出目录
+        mkdir -p ../../out/dist
+        cp arch/arm64/boot/Image.gz-dtb ../../out/dist/
+        cp System.map ../../out/dist/
+        
+        # 回到工作区根目录
+        cd ../../
         
     - name: Archive artifacts
       run: |
-        # 查找输出目录
-        dist_dir="out/common-android13-5.15/dist"
-        
-        # 打包产物
-        cd $dist_dir
+        cd out/dist
         zip -r kernel_artifacts.zip *
         
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: kernel-build
-        path: out/common-android13-5.15/dist/kernel_artifacts.zip
+        path: out/dist/kernel_artifacts.zip

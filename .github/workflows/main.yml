@@ -4,8 +4,8 @@ on: [push]
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 180  # 延长超时时间
+    runs-on: ubuntu-24.04  # 明确指定镜像版本
+    timeout-minutes: 180
     
     steps:
     - name: Checkout code
@@ -17,14 +17,14 @@ jobs:
         sudo apt install -y git-core gnupg flex bison gperf build-essential \
           zip curl zlib1g-dev libc6-dev-i386 libncurses5-dev x11proto-core-dev \
           libgl1-mesa-dev libxml2-utils xsltproc unzip python3 bc ccache \
-          libssl-dev repo
+          libssl-dev repo python-is-python3
         
     - name: Setup repo tool
       run: |
         mkdir -p ~/bin
         curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
-        echo 'export PATH="$HOME/bin:$PATH"' >> $GITHUB_ENV
+        echo "$HOME/bin" >> $GITHUB_PATH
         
     - name: Initialize kernel source
       run: |
@@ -41,9 +41,11 @@ jobs:
     - name: Configure build environment
       run: |
         cd kernel
-        # 修复关键配置项
+        # 禁用LTO编译（解决内存不足问题）
         sed -i 's/CONFIG_LTO=y/CONFIG_LTO=n/' common/build.config.gki.aarch64
         echo 'export LTO=n' >> common/build.config.gki.aarch64
+        
+        # 跳过boot镜像生成
         echo 'BUILD_BOOT_IMG=0' >> common/build.config.gki.aarch64
         echo 'BUILD_VENDOR_BOOT=0' >> common/build.config.gki.aarch64
         
@@ -51,7 +53,6 @@ jobs:
       run: |
         cd kernel
         source build/envsetup.sh
-        lunch aosp_arm64-userdebug  # 或根据设备选择
         build/build.sh
         
     - name: Archive artifacts
@@ -59,9 +60,9 @@ jobs:
       run: |
         cd kernel/out/android-mainline/dist
         zip -r kernel_artifacts.zip *
-        echo "ARTIFACT_PATH=kernel/out/android-mainline/dist/kernel_artifacts.zip" >> $GITHUB_ENV
         
-    - uses: actions/upload-artifact@v3
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4  # 使用v4版本替代弃用的v3
       with:
         name: kernel-build
-        path: ${{ env.ARTIFACT_PATH }}
+        path: kernel/out/android-mainline/dist/kernel_artifacts.zip

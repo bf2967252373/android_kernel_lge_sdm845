@@ -21,30 +21,9 @@ jobs:
         sudo apt install -y git-core gnupg flex bison gperf build-essential \
           zip curl zlib1g-dev libc6-dev-i386 libncurses5-dev x11proto-core-dev \
           libgl1-mesa-dev libxml2-utils xsltproc unzip python3 bc ccache \
-          libssl-dev repo python-is-python3 openjdk-17-jdk \
+          libssl-dev repo python-is-python3 \
           gcc g++ make cmake ninja-build \
           gcc-aarch64-linux-gnu g++-aarch64-linux-gnu  # 交叉编译工具链
-        
-    - name: Install Bazel
-      run: |
-        # 安装Bazel所需的依赖
-        sudo apt install -y apt-transport-https curl gnupg
-        
-        # 添加Bazel的GPG密钥
-        curl -fsSL https://bazel.build/bazel-release.pub.gpg | gpg --dearmor > bazel.gpg
-        sudo mv bazel.gpg /etc/apt/trusted.gpg.d/
-        
-        # 添加Bazel的APT源
-        echo "deb [arch=amd64] https://storage.googleapis.com/bazel-apt stable jdk1.8" | sudo tee /etc/apt/sources.list.d/bazel.list
-        
-        # 安装Bazel
-        sudo apt update
-        sudo apt install -y bazel
-        
-    - name: Verify Bazel installation
-      run: |
-        bazel --version
-        bazel info
         
     - name: Setup repo tool
       run: |
@@ -70,52 +49,11 @@ jobs:
       run: |
         curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
         
-    - name: Configure build environment
+    - name: Configure kernel for SukiSU
       run: |
-        # 创建新的构建配置
-        cat > build.config.gki.aarch64 <<EOL
-        # 基础配置
-        DEFCONFIG=gki_defconfig
+        cd common  # 进入内核源码目录
         
-        # 架构和工具链
-        ARCH=arm64
-        CLANG_TRIPLE=aarch64-linux-gnu-
-        CROSS_COMPILE=aarch64-linux-gnu-
-        
-        # 构建选项
-        BUILD_INITRAMFS=1
-        BUILD_GKI=1
-        BUILD_BOOT_IMG=0
-        BUILD_VENDOR_BOOT=0
-        LTO=n
-        
-        # SukiSU/KernelSU 所需选项
-        POST_DEFCONFIG_CMDS="update_config_for_kernelsu"
-        function update_config_for_kernelsu() {
-            \${KERNEL_DIR}/scripts/config --file \${OUT_DIR}/.config \\
-                -e OVERLAY_FS \\
-                -e KPROBES \\
-                -e KALLSYMS \\
-                -e KALLSYMS_ALL \\
-                -e MODULES \\
-                -e MODULE_UNLOAD \\
-                -e TRACEPOINTS
-        }
-        EOL
-        
-        # 应用配置
-        cp build.config.gki.aarch64 common/build.config.gki.aarch64
-        
-    - name: Build kernel with Make (recommended)
-      run: |
-        # 设置环境变量
-        export ARCH=arm64
-        export CROSS_COMPILE=aarch64-linux-gnu-
-        
-        # 进入内核目录
-        cd common
-        
-        # 准备配置
+        # 准备默认配置
         make gki_defconfig
         
         # 应用 SukiSU 所需配置
@@ -130,6 +68,19 @@ jobs:
         # 应用配置更改
         make olddefconfig
         
+        # 验证配置
+        echo "✅ Kernel configuration complete!"
+        grep -E "OVERLAY|KPROBES|KALLSYMS" .config
+        
+    - name: Build kernel with Make
+      run: |
+        cd common  # 确保在内核源码目录
+        
+        # 设置环境变量
+        export ARCH=arm64
+        export CROSS_COMPILE=aarch64-linux-gnu-
+        export LLVM=1  # 使用Clang编译器（如果可用）
+        
         # 构建内核
         make -j$(nproc) Image.gz-dtb
         
@@ -138,17 +89,23 @@ jobs:
             echo "::error::Kernel image not found!"
             exit 1
         fi
+        echo "✅ Kernel build successful!"
         
-        # 准备输出目录
-        mkdir -p ../../out/dist
-        cp arch/arm64/boot/Image.gz-dtb ../../out/dist/
-        cp System.map ../../out/dist/
-        
-        # 回到工作区根目录
-        cd ../../
-        
-    - name: Archive artifacts
+    - name: Prepare artifacts
       run: |
+        # 创建输出目录
+        mkdir -p out/dist
+        
+        # 复制内核映像
+        cp common/arch/arm64/boot/Image.gz-dtb out/dist/
+        
+        # 复制System.map
+        cp common/System.map out/dist/
+        
+        # 复制配置文件
+        cp common/.config out/dist/config
+        
+        # 打包产物
         cd out/dist
         zip -r kernel_artifacts.zip *
         

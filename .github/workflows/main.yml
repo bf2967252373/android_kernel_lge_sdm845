@@ -21,7 +21,7 @@ jobs:
         sudo apt install -y git-core gnupg flex bison gperf build-essential \
           zip curl zlib1g-dev libc6-dev-i386 libncurses5-dev x11proto-core-dev \
           libgl1-mesa-dev libxml2-utils xsltproc unzip python3 bc ccache \
-          libssl-dev repo python-is-python3
+          libssl-dev repo python-is-python3 bazel bazel-remote
         
     - name: Setup repo tool
       run: |
@@ -30,32 +30,11 @@ jobs:
         chmod a+x ~/bin/repo
         echo "$HOME/bin" >> $GITHUB_PATH
         
-    - name: Find valid kernel branch
-      id: find-branch
-      run: |
-        # 获取可用分支列表
-        branches=$(git ls-remote https://android.googlesource.com/kernel/manifest | grep -o 'refs/heads/[^ ]*')
-        echo "Available branches:"
-        echo "$branches"
-        
-        # 选择合适的分支（优先选择LTS分支）
-        if echo "$branches" | grep -q "refs/heads/common-android13-5.15"; then
-          branch="common-android13-5.15"
-        elif echo "$branches" | grep -q "refs/heads/android12-5.10-lts"; then
-          branch="android12-5.10-lts"
-        else
-          # 回退到第一个可用分支
-          branch=$(echo "$branches" | head -1 | sed 's|refs/heads/||')
-        fi
-        
-        echo "Selected branch: $branch"
-        echo "branch=$branch" >> $GITHUB_OUTPUT
-        
     - name: Initialize kernel source
       run: |
-        echo "Initializing with branch: ${{ steps.find-branch.outputs.branch }}"
+        # 使用已知有效的分支
         repo init -u https://android.googlesource.com/kernel/manifest \
-          -b ${{ steps.find-branch.outputs.branch }} --depth=1
+          -b common-android13-5.15 --depth=1
         
         # 同步源码（添加重试机制）
         for i in {1..5}; do
@@ -70,42 +49,76 @@ jobs:
         
     - name: Configure build environment
       run: |
-        # 禁用LTO编译
-        if [ -f "common/build.config.gki.aarch64" ]; then
-          sed -i 's/CONFIG_LTO=y/CONFIG_LTO=n/' common/build.config.gki.aarch64
-          echo 'export LTO=n' >> common/build.config.gki.aarch64
-        fi
+        # 创建新的构建配置
+        cat > build.config.gki.aarch64 <<EOL
+        # 基础配置
+        DEFCONFIG=gki_defconfig
         
-        # 跳过boot镜像生成
-        echo 'BUILD_BOOT_IMG=0' >> common/build.config.gki.aarch64
-        echo 'BUILD_VENDOR_BOOT=0' >> common/build.config.gki.aarch64
+        # 架构和工具链
+        ARCH=arm64
+        CLANG_TRIPLE=aarch64-linux-gnu-
+        CROSS_COMPILE=aarch64-linux-gnu-
         
-    - name: Build kernel
+        # 构建选项
+        BUILD_INITRAMFS=1
+        BUILD_GKI=1
+        BUILD_BOOT_IMG=0
+        BUILD_VENDOR_BOOT=0
+        LTO=n
+        
+        # SukiSU/KernelSU 所需选项
+        POST_DEFCONFIG_CMDS="update_config_for_kernelsu"
+        function update_config_for_kernelsu() {
+            ${KERNEL_DIR}/scripts/config --file ${OUT_DIR}/.config \\
+                -e OVERLAY_FS \\
+                -e KPROBES \\
+                -e KALLSYMS \\
+                -e KALLSYMS_ALL \\
+                -e MODULES \\
+                -e MODULE_UNLOAD \\
+                -e TRACEPOINTS
+        }
+        EOL
+        
+        # 应用配置
+        cp build.config.gki.aarch64 common/build.config.gki.aarch64
+        
+    - name: Build kernel with Bazel
       run: |
-        source build/envsetup.sh
-        build/build.sh
+        # 使用 Bazel 构建
+        tools/bazel run --config=fast //common:kernel_aarch64_dist
         
     - name: Verify build artifacts
       run: |
-        # 动态查找输出目录
-        dist_dir=$(find out -name dist -type d | head -1)
-        if [ -z "$dist_dir" ]; then
-          echo "::error::No dist directory found!"
-          find . -type d | grep out
-          exit 1
+        # 检查 Bazel 输出
+        if [ ! -f "bazel-bin/common/kernel_aarch64_dist" ]; then
+            echo "::error::Bazel build failed!"
+            ls -R bazel-bin
+            exit 1
         fi
         
-        if [ ! -f "$dist_dir/Image.gz" ]; then
-          echo "::error::Kernel image not found in $dist_dir!"
-          ls -la "$dist_dir"
-          exit 1
+        # 检查内核映像
+        if [ ! -f "out/common-android13-5.15/dist/Image" ]; then
+            echo "::error::Kernel image not found!"
+            find out -name Image -print
+            exit 1
         fi
         echo "✅ Kernel build successful!"
         
     - name: Archive artifacts
       run: |
+        # 查找输出目录
         dist_dir=$(find out -name dist -type d | head -1)
-        cd "$dist_dir"
+        if [ -z "$dist_dir" ]; then
+            dist_dir="out/common-android13-5.15/dist"
+            mkdir -p $dist_dir
+        fi
+        
+        # 复制 Bazel 输出
+        cp bazel-bin/common/kernel_aarch64_dist $dist_dir/
+        
+        # 打包产物
+        cd $dist_dir
         zip -r kernel_artifacts.zip *
         
     - name: Upload artifacts

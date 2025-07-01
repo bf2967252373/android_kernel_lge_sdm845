@@ -1,0 +1,31 @@
+name: Build GKI Kernel with SukiSU
+
+on: [push]  # 触发条件
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up environment
+      run: |
+        sudo apt update
+        sudo apt install -y git gnupg flex bison gperf build-essential zip curl zlib1g-dev libc6-dev-i386 bc
+
+    - name: Integrate SukiSU
+      run: |
+        curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
+
+    - name: Build Kernel
+      env:
+        LTO: thin  # 避免内存不足
+        BUILD_CONFIG: common/build.config.gki.aarch64
+      run: |
+        build/build.sh
+        # 若为Android 13+，改用Bazel： tools/bazel build --config=fast //common:kernel_aarch64_dist
+
+    - name: Package Artifacts
+      run: |
+        zip -r kernel_artifact.zip out/*   # 包含Image.gz和模块

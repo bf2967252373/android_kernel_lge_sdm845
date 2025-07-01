@@ -23,7 +23,22 @@ jobs:
           libgl1-mesa-dev libxml2-utils xsltproc unzip python3 bc ccache \
           libssl-dev repo python-is-python3 \
           gcc g++ make cmake ninja-build \
-          gcc-aarch64-linux-gnu g++-aarch64-linux-gnu  # 交叉编译工具链
+          gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+          clang lld llvm binutils binutils-aarch64-linux-gnu \
+          clang-18 llvm-18 lld-18  # 安装特定版本的LLVM
+        
+    - name: Set up LLVM symlinks
+      run: |
+        # 创建必要的符号链接
+        sudo ln -sf /usr/bin/ld.lld-18 /usr/bin/ld.lld
+        sudo ln -sf /usr/bin/llvm-ar-18 /usr/bin/llvm-ar
+        sudo ln -sf /usr/bin/llvm-nm-18 /usr/bin/llvm-nm
+        sudo ln -sf /usr/bin/llvm-objcopy-18 /usr/bin/llvm-objcopy
+        sudo ln -sf /usr/bin/llvm-strip-18 /usr/bin/llvm-strip
+        
+        # 验证链接
+        ls -l /usr/bin/ld.lld
+        ld.lld --version
         
     - name: Setup repo tool
       run: |
@@ -72,14 +87,19 @@ jobs:
         echo "✅ Kernel configuration complete!"
         grep -E "OVERLAY|KPROBES|KALLSYMS" .config
         
-    - name: Build kernel with Make
+    - name: Build kernel with GCC (recommended)
       run: |
         cd common  # 确保在内核源码目录
         
-        # 设置环境变量
+        # 设置环境变量 - 使用GCC工具链
         export ARCH=arm64
         export CROSS_COMPILE=aarch64-linux-gnu-
-        export LLVM=1  # 使用Clang编译器（如果可用）
+        
+        # 显式设置工具链变量
+        export CC=aarch64-linux-gnu-gcc
+        export LD=aarch64-linux-gnu-ld
+        export AR=aarch64-linux-gnu-ar
+        export NM=aarch64-linux-gnu-nm
         
         # 构建内核
         make -j$(nproc) Image.gz-dtb
@@ -89,7 +109,7 @@ jobs:
             echo "::error::Kernel image not found!"
             exit 1
         fi
-        echo "✅ Kernel build successful!"
+        echo "✅ Kernel build successful with GCC!"
         
     - name: Prepare artifacts
       run: |

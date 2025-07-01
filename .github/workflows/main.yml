@@ -1,31 +1,67 @@
 name: Build GKI Kernel with SukiSU
 
-on: [push]  # 触发条件
+on: [push]
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 180  # 延长超时时间
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-
-    - name: Set up environment
+      
+    - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y git gnupg flex bison gperf build-essential zip curl zlib1g-dev libc6-dev-i386 bc
-
-    - name: Integrate SukiSU
+        sudo apt install -y git-core gnupg flex bison gperf build-essential \
+          zip curl zlib1g-dev libc6-dev-i386 libncurses5-dev x11proto-core-dev \
+          libgl1-mesa-dev libxml2-utils xsltproc unzip python3 bc ccache \
+          libssl-dev repo
+        
+    - name: Setup repo tool
       run: |
+        mkdir -p ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        echo 'export PATH="$HOME/bin:$PATH"' >> $GITHUB_ENV
+        
+    - name: Initialize kernel source
+      run: |
+        mkdir kernel && cd kernel
+        repo init -u https://android.googlesource.com/kernel/manifest \
+          -b android-mainline --depth=1
+        repo sync -c -j$(nproc) --force-sync --no-clone-bundle --no-tags
+        
+    - name: Apply SukiSU patches
+      run: |
+        cd kernel
         curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
-
-    - name: Build Kernel
-      env:
-        LTO: thin  # 避免内存不足
-        BUILD_CONFIG: common/build.config.gki.aarch64
+        
+    - name: Configure build environment
       run: |
+        cd kernel
+        # 修复关键配置项
+        sed -i 's/CONFIG_LTO=y/CONFIG_LTO=n/' common/build.config.gki.aarch64
+        echo 'export LTO=n' >> common/build.config.gki.aarch64
+        echo 'BUILD_BOOT_IMG=0' >> common/build.config.gki.aarch64
+        echo 'BUILD_VENDOR_BOOT=0' >> common/build.config.gki.aarch64
+        
+    - name: Build kernel
+      run: |
+        cd kernel
+        source build/envsetup.sh
+        lunch aosp_arm64-userdebug  # 或根据设备选择
         build/build.sh
-        # 若为Android 13+，改用Bazel： tools/bazel build --config=fast //common:kernel_aarch64_dist
-
-    - name: Package Artifacts
+        
+    - name: Archive artifacts
+      if: success()
       run: |
-        zip -r kernel_artifact.zip out/*   # 包含Image.gz和模块
+        cd kernel/out/android-mainline/dist
+        zip -r kernel_artifacts.zip *
+        echo "ARTIFACT_PATH=kernel/out/android-mainline/dist/kernel_artifacts.zip" >> $GITHUB_ENV
+        
+    - uses: actions/upload-artifact@v3
+      with:
+        name: kernel-build
+        path: ${{ env.ARTIFACT_PATH }}

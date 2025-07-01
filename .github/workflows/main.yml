@@ -21,7 +21,23 @@ jobs:
         sudo apt install -y git-core gnupg flex bison gperf build-essential \
           zip curl zlib1g-dev libc6-dev-i386 libncurses5-dev x11proto-core-dev \
           libgl1-mesa-dev libxml2-utils xsltproc unzip python3 bc ccache \
-          libssl-dev repo python-is-python3 bazel bazel-remote
+          libssl-dev repo python-is-python3 openjdk-17-jdk
+        
+    - name: Install Bazel
+      run: |
+        # 安装Bazel所需的依赖
+        sudo apt install -y apt-transport-https curl gnupg
+        
+        # 添加Bazel的GPG密钥
+        curl -fsSL https://bazel.build/bazel-release.pub.gpg | gpg --dearmor > bazel.gpg
+        sudo mv bazel.gpg /etc/apt/trusted.gpg.d/
+        
+        # 添加Bazel的APT源
+        echo "deb [arch=amd64] https://storage.googleapis.com/bazel-apt stable jdk1.8" | sudo tee /etc/apt/sources.list.d/bazel.list
+        
+        # 安装Bazel
+        sudo apt update
+        sudo apt install -y bazel
         
     - name: Setup repo tool
       run: |
@@ -69,7 +85,7 @@ jobs:
         # SukiSU/KernelSU 所需选项
         POST_DEFCONFIG_CMDS="update_config_for_kernelsu"
         function update_config_for_kernelsu() {
-            ${KERNEL_DIR}/scripts/config --file ${OUT_DIR}/.config \\
+            \${KERNEL_DIR}/scripts/config --file \${OUT_DIR}/.config \\
                 -e OVERLAY_FS \\
                 -e KPROBES \\
                 -e KALLSYMS \\
@@ -98,8 +114,9 @@ jobs:
         fi
         
         # 检查内核映像
-        if [ ! -f "out/common-android13-5.15/dist/Image" ]; then
-            echo "::error::Kernel image not found!"
+        dist_dir="out/common-android13-5.15/dist"
+        if [ ! -f "$dist_dir/Image" ]; then
+            echo "::error::Kernel image not found in $dist_dir!"
             find out -name Image -print
             exit 1
         fi
@@ -108,14 +125,7 @@ jobs:
     - name: Archive artifacts
       run: |
         # 查找输出目录
-        dist_dir=$(find out -name dist -type d | head -1)
-        if [ -z "$dist_dir" ]; then
-            dist_dir="out/common-android13-5.15/dist"
-            mkdir -p $dist_dir
-        fi
-        
-        # 复制 Bazel 输出
-        cp bazel-bin/common/kernel_aarch64_dist $dist_dir/
+        dist_dir="out/common-android13-5.15/dist"
         
         # 打包产物
         cd $dist_dir
@@ -125,4 +135,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: kernel-build
-        path: ${{ github.workspace }}/$dist_dir/kernel_artifacts.zip
+        path: out/common-android13-5.15/dist/kernel_artifacts.zip

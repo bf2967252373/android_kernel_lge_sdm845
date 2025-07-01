@@ -4,10 +4,16 @@ on: [push]
 
 jobs:
   build:
-    runs-on: ubuntu-24.04  # 明确指定镜像版本
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     
     steps:
+    - name: Clean workspace
+      run: |
+        # 清理可能存在的旧文件
+        rm -rf kernel || true
+        rm -rf .repo || true
+        
     - name: Checkout code
       uses: actions/checkout@v4
       
@@ -28,19 +34,23 @@ jobs:
         
     - name: Initialize kernel source
       run: |
-        mkdir kernel && cd kernel
+        # 使用稳定分支替代 android-mainline
         repo init -u https://android.googlesource.com/kernel/manifest \
-          -b android-mainline --depth=1
-        repo sync -c -j$(nproc) --force-sync --no-clone-bundle --no-tags
+          -b android14-6.1 --depth=1
+        
+        # 同步源码（添加重试机制）
+        for i in {1..3}; do
+          repo sync -c -j$(nproc) --force-sync --no-clone-bundle --no-tags && break
+          echo "Repo sync failed (attempt $i/3), retrying in 10 seconds..."
+          sleep 10
+        done
         
     - name: Apply SukiSU patches
       run: |
-        cd kernel
         curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
         
     - name: Configure build environment
       run: |
-        cd kernel
         # 禁用LTO编译（解决内存不足问题）
         sed -i 's/CONFIG_LTO=y/CONFIG_LTO=n/' common/build.config.gki.aarch64
         echo 'export LTO=n' >> common/build.config.gki.aarch64
@@ -49,20 +59,30 @@ jobs:
         echo 'BUILD_BOOT_IMG=0' >> common/build.config.gki.aarch64
         echo 'BUILD_VENDOR_BOOT=0' >> common/build.config.gki.aarch64
         
+        # 配置GKI构建
+        echo 'BUILD_GKI=1' >> common/build.config.gki.aarch64
+        
     - name: Build kernel
       run: |
-        cd kernel
         source build/envsetup.sh
         build/build.sh
         
-    - name: Archive artifacts
-      if: success()
+    - name: Verify build artifacts
       run: |
-        cd kernel/out/android-mainline/dist
+        if [ ! -f "out/android14-6.1/dist/Image.gz" ]; then
+          echo "::error::Kernel image not found!"
+          ls -R out
+          exit 1
+        fi
+        echo "✅ Kernel build successful!"
+        
+    - name: Archive artifacts
+      run: |
+        cd out/android14-6.1/dist
         zip -r kernel_artifacts.zip *
         
     - name: Upload artifacts
-      uses: actions/upload-artifact@v4  # 使用v4版本替代弃用的v3
+      uses: actions/upload-artifact@v4
       with:
         name: kernel-build
-        path: kernel/out/android-mainline/dist/kernel_artifacts.zip
+        path: out/android14-6.1/dist/kernel_artifacts.zip

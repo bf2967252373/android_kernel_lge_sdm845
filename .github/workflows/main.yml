@@ -107,7 +107,7 @@ jobs:
         # 验证构建结果
         if [ ! -f "arch/arm64/boot/Image.gz-dtb" ]; then
             echo "::error::Kernel image not found!"
-            exit 2
+            exit 1
         fi
         echo "✅ Kernel build successful with GCC!"
         

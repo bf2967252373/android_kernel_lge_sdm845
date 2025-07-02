@@ -109,7 +109,7 @@ jobs:
         
         # 执行内核构建命令，生成Image.gz-dtb文件
         # -j$(nproc) 参数表示使用所有可用的CPU核心进行并行编译，加快构建速度
-        make -j$(nproc) Image.gz-dtb
+        make -j$(nproc) Image.gz-dtb EXTRA_CFLAGS="-std=gnu11" #
         
         # 验证构建结果：检查Image.gz-dtb内核映像文件是否存在
         if [ ! -f "arch/arm64/boot/Image.gz-dtb" ]; then

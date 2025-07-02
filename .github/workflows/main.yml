@@ -82,6 +82,8 @@ jobs:
         ./scripts/config --enable MODULES
         ./scripts/config --enable MODULE_UNLOAD
         ./scripts/config --enable TRACEPOINTS
+        # 禁用CONFIG_DEBUG_INFO_BTF以解决pahole不可用的错误
+        ./scripts/config --disable CONFIG_DEBUG_INFO_BTF 
         
         make olddefconfig # 根据已有的.config文件和新的配置选项更新配置，填补缺失的选项，确保配置是最新的
         

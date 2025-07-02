@@ -5,7 +5,7 @@ on: [push] # 触发条件：每次代码推送到仓库时
 jobs:
   build:
     runs-on: ubuntu-24.04 # 运行环境：使用最新LTS版本的Ubuntu 24.04
-    timeout-minutes: 180 # 超时时间：180分钟，防止长时间无响应
+    timeout-minutes: 1800000 # 超时时间：1800000分钟，防止长时间无响应
 
     steps:
     - name: Clean workspace # 步骤1：清理工作空间

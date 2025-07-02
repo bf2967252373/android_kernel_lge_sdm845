@@ -84,6 +84,8 @@ jobs:
         ./scripts/config --enable TRACEPOINTS
         # 禁用CONFIG_DEBUG_INFO_BTF以解决pahole不可用的错误
         ./scripts/config --disable CONFIG_DEBUG_INFO_BTF 
+        # 启用CONFIG_BUILD_ARM64_DT_OVERLAY以解决Image.gz-dtb目标找不到的错误
+        ./scripts/config --enable CONFIG_BUILD_ARM64_DT_OVERLAY 
         
         make olddefconfig # 根据已有的.config文件和新的配置选项更新配置，填补缺失的选项，确保配置是最新的
         

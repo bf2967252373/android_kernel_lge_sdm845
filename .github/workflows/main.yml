@@ -4,13 +4,13 @@ on: [push] # 触发条件：每次代码推送到仓库时
 
 jobs:
   build:
-    runs-on: ubuntu-24.04 # 运行环境：Ubuntu 24.04
-    timeout-minutes: 180 # 超时时间：180分钟
+    runs-on: ubuntu-24.04 # 运行环境：使用最新LTS版本的Ubuntu 24.04
+    timeout-minutes: 180 # 超时时间：180分钟，防止长时间无响应
 
     steps:
     - name: Clean workspace # 步骤1：清理工作空间
       run: |
-        rm -rf .repo || true # 删除可能存在的.repo目录，确保干净的环境
+        rm -rf .repo || true # 删除可能存在的.repo目录，确保构建环境干净
 
     - name: Checkout code # 步骤2：检出代码
       uses: actions/checkout@v4 # 使用actions/checkout@v4动作检出当前仓库代码
@@ -51,6 +51,7 @@ jobs:
     - name: Initialize kernel source # 步骤6：初始化内核源码
       run: |
         # 使用repo工具初始化Android内核源码仓库，指定manifest文件和分支（common-android13-5.15）
+        # --depth=1 参数只拉取最新提交，减少下载量
         repo init -u https://android.googlesource.com/kernel/manifest \
           -b common-android13-5.15 --depth=1
         
@@ -64,11 +65,12 @@ jobs:
     - name: Apply SukiSU patches # 步骤7：应用SukiSU补丁
       run: |
         # 从KernelSU官方仓库下载并执行setup.sh脚本，以应用SukiSU所需的内核补丁
+        # main 参数表示使用主分支的补丁
         curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
 
     - name: Configure kernel for SukiSU # 步骤8：为SukiSU配置内核
       run: |
-        cd common # 进入内核源码根目录（通常为 common 目录）
+        cd common # 进入内核源码根目录（repo sync后，内核代码通常在 common 目录下）
         
         make gki_defconfig # 生成GKI（Generic Kernel Image）默认配置
         
@@ -81,53 +83,55 @@ jobs:
         ./scripts/config --enable MODULE_UNLOAD
         ./scripts/config --enable TRACEPOINTS
         
-        make olddefconfig # 根据已有的.config文件和新的配置选项更新配置，填补缺失的选项
+        make olddefconfig # 根据已有的.config文件和新的配置选项更新配置，填补缺失的选项，确保配置是最新的
         
         echo "✅ Kernel configuration complete!" # 打印配置完成信息
-        grep -E "OVERLAY|KPROBES|KALLSYMS" .config # 验证部分关键配置是否已启用
+        grep -E "OVERLAY|KPROBES|KALLSYMS" .config # 验证部分关键配置是否已启用，进行简单检查
 
     - name: Build kernel with GCC (recommended) # 步骤9：使用GCC构建内核
       run: |
         cd common # 确保当前目录在内核源码根目录
         
-        # 设置交叉编译所需的环境变量，指定架构为arm64，交叉编译工具链前缀
+        # 设置交叉编译所需的环境变量，指定目标架构为arm64，并设置交叉编译工具链的前缀
         export ARCH=arm64
         export CROSS_COMPILE=aarch64-linux-gnu-
         
-        # 显式设置各种工具链的可执行文件路径，以确保使用正确的GCC工具链
+        # 显式设置各种工具链的可执行文件路径，以确保使用正确的GCC工具链，避免环境路径问题
         export CC=aarch64-linux-gnu-gcc
         export LD=aarch64-linux-gnu-ld
         export AR=aarch64-linux-gnu-ar
         export NM=aarch64-linux-gnu-nm
         
         # 【核心修复】设置KBUILD_CFLAGS环境变量，强制编译器使用GNU11 C标准
-        # 这样可以解决 'for' 循环初始声明的错误
+        # 这一行是解决“‘for’ loop initial declarations are only allowed in C99 or C11 mode”错误的关键。
+        # 它确保编译器以支持现代C语言语法的方式编译KernelSU的代码。
         export KBUILD_CFLAGS="-std=gnu11" 
         
-        # 执行内核构建，-j$(nproc)参数表示使用所有可用的CPU核心进行并行编译
+        # 执行内核构建命令，生成Image.gz-dtb文件
+        # -j$(nproc) 参数表示使用所有可用的CPU核心进行并行编译，加快构建速度
         make -j$(nproc) Image.gz-dtb
         
         # 验证构建结果：检查Image.gz-dtb内核映像文件是否存在
         if [ ! -f "arch/arm64/boot/Image.gz-dtb" ]; then
-            echo "::error::Kernel image not found!" # 如果文件不存在，输出错误并退出
+            echo "::error::Kernel image not found!" # 如果文件不存在，输出错误信息并退出工作流
             exit 1
         fi
         echo "✅ Kernel build successful with GCC!" # 打印构建成功信息
 
     - name: Prepare artifacts # 步骤10：准备构建产物
       run: |
-        mkdir -p out/dist # 创建输出目录
+        mkdir -p out/dist # 创建输出目录，用于存放最终的构建产物
         
-        # 复制构建好的内核映像、System.map（符号表）和.config文件到输出目录
+        # 复制构建好的内核映像、System.map（用于调试的符号表）和.config文件（内核配置）到输出目录
         cp common/arch/arm64/boot/Image.gz-dtb out/dist/
         cp common/System.map out/dist/
         cp common/.config out/dist/config
         
         cd out/dist # 进入输出目录
-        zip -r kernel_artifacts.zip * # 将所有产物打包成一个zip文件
+        zip -r kernel_artifacts.zip * # 将所有产物打包成一个zip文件，方便下载和管理
 
     - name: Upload artifacts # 步骤11：上传构建产物
-      uses: actions/upload-artifact@v4 # 使用actions/upload-artifact@v4动作上传产物
+      uses: actions/upload-artifact@v4 # 使用actions/upload-artifact@v4动作上传产物到GitHub Actions的Artifacts存储
       with:
-        name: kernel-build # 产物名称
-        path: out/dist/kernel_artifacts.zip # 产物路径
+        name: kernel-build # 产物名称，方便在GitHub Actions界面识别
+        path: out/dist/kernel_artifacts.zip # 产物在runner上的路径

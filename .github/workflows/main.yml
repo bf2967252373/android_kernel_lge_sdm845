@@ -1,23 +1,23 @@
-name: Build GKI Kernel with SukiSU # 构建GKI内核（含SukiSU）
+name: Build GKI Kernel with SukiSU # 工作流名称：构建GKI内核（含SukiSU）
 
-on: [push] # 在每次push到仓库时触发
+on: [push] # 触发条件：每次代码推送到仓库时
 
 jobs:
   build:
-    runs-on: ubuntu-24.04 # 使用Ubuntu 24.04作为运行环境
-    timeout-minutes: 180 # 超时时间180分钟
-    
+    runs-on: ubuntu-24.04 # 运行环境：Ubuntu 24.04
+    timeout-minutes: 180 # 超时时间：180分钟
+
     steps:
-    - name: Clean workspace # 清理工作空间
+    - name: Clean workspace # 步骤1：清理工作空间
       run: |
-        rm -rf .repo || true
-        
-    - name: Checkout code # 检出代码
-      uses: actions/checkout@v4
-      
-    - name: Install dependencies # 安装依赖
+        rm -rf .repo || true # 删除可能存在的.repo目录，确保干净的环境
+
+    - name: Checkout code # 步骤2：检出代码
+      uses: actions/checkout@v4 # 使用actions/checkout@v4动作检出当前仓库代码
+
+    - name: Install dependencies # 步骤3：安装依赖
       run: |
-        sudo apt update
+        sudo apt update # 更新apt包列表
         sudo apt install -y git-core gnupg flex bison gperf build-essential \
           zip curl zlib1g-dev libc6-dev-i386 libncurses5-dev x11proto-core-dev \
           libgl1-mesa-dev libxml2-utils xsltproc unzip python3 bc ccache \
@@ -26,54 +26,53 @@ jobs:
           gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
           clang lld llvm binutils binutils-aarch64-linux-gnu \
           clang-18 llvm-18 lld-18 \
-          libelf-dev libz-dev # <-- 添加这两行，确保libelf和libz开发库可用
-        
-    - name: Set up LLVM symlinks # 设置LLVM符号链接
+          libelf-dev libz-dev # 安装所有必要的构建工具和库，包括交叉编译工具链和LLVM/Clang相关工具
+
+    - name: Set up LLVM symlinks # 步骤4：设置LLVM符号链接
       run: |
-        # 创建必要的符号链接，指向clang-18提供的工具
+        # 创建必要的符号链接，将版本化的Clang/LLVM工具链接到常用名称，方便后续构建系统调用
         sudo ln -sf /usr/bin/ld.lld-18 /usr/bin/ld.lld
         sudo ln -sf /usr/bin/llvm-ar-18 /usr/bin/llvm-ar
         sudo ln -sf /usr/bin/llvm-nm-18 /usr/bin/llvm-nm
         sudo ln -sf /usr/bin/llvm-objcopy-18 /usr/bin/llvm-objcopy
         sudo ln -sf /usr/bin/llvm-strip-18 /usr/bin/llvm-strip
         
-        # 验证链接是否成功
+        # 验证链接是否成功创建
         ls -l /usr/bin/ld.lld
         ld.lld --version
-        
-    - name: Setup repo tool # 设置repo工具
+
+    - name: Setup repo tool # 步骤5：设置repo工具
       run: |
-        mkdir -p ~/bin
-        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-        chmod a+x ~/bin/repo
-        echo "$HOME/bin" >> $GITHUB_PATH # 将repo工具添加到PATH环境变量
-        
-    - name: Initialize kernel source # 初始化内核源码
+        mkdir -p ~/bin # 创建~/bin目录
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo # 下载repo工具
+        chmod a+x ~/bin/repo # 赋予执行权限
+        echo "$HOME/bin" >> $GITHUB_PATH # 将repo工具所在目录添加到PATH环境变量，使其可在任何地方执行
+
+    - name: Initialize kernel source # 步骤6：初始化内核源码
       run: |
-        # 使用已知有效的分支进行repo初始化，这里选择common-android13-5.15
+        # 使用repo工具初始化Android内核源码仓库，指定manifest文件和分支（common-android13-5.15）
         repo init -u https://android.googlesource.com/kernel/manifest \
           -b common-android13-5.15 --depth=1
         
-        # 同步源码（添加重试机制，以应对网络不稳定）
-        for i in {1..5}; do
-          repo sync -c -j$(nproc) --force-sync --no-clone-bundle --no-tags && break
-          echo "Repo sync failed (attempt $i/5), retrying in 10 seconds..."
+        # 同步源码（包含重试机制，以提高成功率）
+        for i in {1..5}; do # 尝试同步5次
+          repo sync -c -j$(nproc) --force-sync --no-clone-bundle --no-tags && break # 同步命令，使用所有CPU核心，强制同步，不克隆bundle和标签
+          echo "Repo sync failed (attempt $i/5), retrying in 10 seconds..." # 同步失败则提示并等待
           sleep 10
         done
-        
-    - name: Apply SukiSU patches # 应用SukiSU补丁
+
+    - name: Apply SukiSU patches # 步骤7：应用SukiSU补丁
       run: |
-        # 使用tiann/KernelSU仓库中的setup.sh脚本来应用补丁
+        # 从KernelSU官方仓库下载并执行setup.sh脚本，以应用SukiSU所需的内核补丁
         curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
-        
-    - name: Configure kernel for SukiSU # 为SukiSU配置内核
+
+    - name: Configure kernel for SukiSU # 步骤8：为SukiSU配置内核
       run: |
-        cd common  # 进入内核源码目录
+        cd common # 进入内核源码根目录（通常为 common 目录）
         
-        # 准备默认GKI配置
-        make gki_defconfig
+        make gki_defconfig # 生成GKI（Generic Kernel Image）默认配置
         
-        # 应用 SukiSU 所需的内核配置选项
+        # 使用scripts/config脚本启用SukiSU所需的内核配置选项
         ./scripts/config --enable OVERLAY_FS
         ./scripts/config --enable KPROBES
         ./scripts/config --enable KALLSYMS
@@ -82,61 +81,53 @@ jobs:
         ./scripts/config --enable MODULE_UNLOAD
         ./scripts/config --enable TRACEPOINTS
         
-        # 根据新的配置更新.config文件
-        make olddefconfig
+        make olddefconfig # 根据已有的.config文件和新的配置选项更新配置，填补缺失的选项
         
-        # 验证配置是否成功
-        echo "✅ Kernel configuration complete!"
-        grep -E "OVERLAY|KPROBES|KALLSYMS" .config
-        
-    - name: Build kernel with GCC (recommended) # 使用GCC构建内核
+        echo "✅ Kernel configuration complete!" # 打印配置完成信息
+        grep -E "OVERLAY|KPROBES|KALLSYMS" .config # 验证部分关键配置是否已启用
+
+    - name: Build kernel with GCC (recommended) # 步骤9：使用GCC构建内核
       run: |
-        cd common  # 确保在内核源码目录
+        cd common # 确保当前目录在内核源码根目录
         
-        # 设置交叉编译所需的环境变量
+        # 设置交叉编译所需的环境变量，指定架构为arm64，交叉编译工具链前缀
         export ARCH=arm64
         export CROSS_COMPILE=aarch64-linux-gnu-
         
-        # 显式设置工具链路径
+        # 显式设置各种工具链的可执行文件路径，以确保使用正确的GCC工具链
         export CC=aarch64-linux-gnu-gcc
         export LD=aarch64-linux-gnu-ld
         export AR=aarch64-linux-gnu-ar
         export NM=aarch64-linux-gnu-nm
         
-        # 【重要改动】导出 KBUILD_CFLAGS 以包含 C 标准标志
-        # 这会告诉内核构建系统使用 gnu11 C 标准，解决之前for循环声明的错误。
+        # 【核心修复】设置KBUILD_CFLAGS环境变量，强制编译器使用GNU11 C标准
+        # 这样可以解决 'for' 循环初始声明的错误
         export KBUILD_CFLAGS="-std=gnu11" 
         
-        # 构建内核映像 Image.gz-dtb
+        # 执行内核构建，-j$(nproc)参数表示使用所有可用的CPU核心进行并行编译
         make -j$(nproc) Image.gz-dtb
         
-        # 验证构建结果，检查内核映像是否存在
+        # 验证构建结果：检查Image.gz-dtb内核映像文件是否存在
         if [ ! -f "arch/arm64/boot/Image.gz-dtb" ]; then
-            echo "::error::Kernel image not found!"
+            echo "::error::Kernel image not found!" # 如果文件不存在，输出错误并退出
             exit 1
         fi
-        echo "✅ Kernel build successful with GCC!"
-        
-    - name: Prepare artifacts # 准备构建产物
+        echo "✅ Kernel build successful with GCC!" # 打印构建成功信息
+
+    - name: Prepare artifacts # 步骤10：准备构建产物
       run: |
-        # 创建输出目录
-        mkdir -p out/dist
+        mkdir -p out/dist # 创建输出目录
         
-        # 复制内核映像
+        # 复制构建好的内核映像、System.map（符号表）和.config文件到输出目录
         cp common/arch/arm64/boot/Image.gz-dtb out/dist/
-        
-        # 复制System.map文件（符号表）
         cp common/System.map out/dist/
-        
-        # 复制内核配置文件
         cp common/.config out/dist/config
         
-        # 将所有产物打包成zip文件
-        cd out/dist
-        zip -r kernel_artifacts.zip *
-        
-    - name: Upload artifacts # 上传构建产物
-      uses: actions/upload-artifact@v4
+        cd out/dist # 进入输出目录
+        zip -r kernel_artifacts.zip * # 将所有产物打包成一个zip文件
+
+    - name: Upload artifacts # 步骤11：上传构建产物
+      uses: actions/upload-artifact@v4 # 使用actions/upload-artifact@v4动作上传产物
       with:
-        name: kernel-build
-        path: out/dist/kernel_artifacts.zip
+        name: kernel-build # 产物名称
+        path: out/dist/kernel_artifacts.zip # 产物路径
